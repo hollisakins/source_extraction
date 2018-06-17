@@ -3,10 +3,11 @@ from astropy import wcs
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
-import os
-import warnings
+import os 
+import warnings 
+import sep 
 
-warnings.catch_warnings()
+warnings.catch_warnings() 
 warnings.simplefilter("ignore")
 
 class Field(object):
@@ -18,38 +19,40 @@ class Field(object):
         with fits.open(self.filename) as hdulist:
             hdr = hdulist[0].header
             img = hdulist[0].data
+            img = np.array(img,dtype='<f4')
         return hdr,img
 
     def Source(self): # gathers source extraction data from .SRC file
         src = np.loadtxt(self.filename.replace('.fits','.SRC'))
         objects = src[:,0:2] # pixel X,Y coordinates of the objects in question
-        magnitudes = src[:,2]
         X_pos = src[:,0]
         Y_pos = src[:,1]
         A = src[:,8]
         B = src[:,9]
         theta = src[:,10]
-        self.source = {'obj':objects,'mag':magnitudes,'X':X_pos,'Y':Y_pos,'A':A,'B':B,'theta':theta}
         print('    Gathered source data for %s' % self.filename)
+        return {'obj':objects,'X':X_pos,'Y':Y_pos,'A':A,'B':B,'theta':theta}
 
     def Convert(self): # converts obj list in pixel coordinate to RA-dec coordinates
-        self.Source()
         hdr, img = self.openFits()
         w = wcs.WCS(hdr)
-        # w.wcs.print_contents()
         objects = self.source['obj']
-        instrumental = self.source['mag']
         world = w.wcs_pix2world(objects, 1)
-        ### add into this function the ability to take the "world" and "magnitudes" arrays 
-        ### and calibrate to a star catalog, based on the median value
-        magnitudes = instrumental
-        # median_i = np.median(instrumental)
+        print('    Converted coordinates to RA/Dec for %s' % self.filename)
+        return world
+
+    def Photometry(self):
+        hdr, img = self.openFits()
+        bkg = sep.Background(img)
+        img_sub = img - bkg
+        flux, fluxerr, flag = sep.sum_circle(img_sub, self.source['X'], self.source['Y'], 10.0, err=bkg.globalrms, gain=1.0)
+        magnitudes = -2.5*np.log(flux)
+
+        # median_i = np.median(magnitudes)
         # median_c = np.median(catalog)
         # dif = median_c - median_i
-        # magnitudes = instrumental + dif
-        print('    Converted coordinates to RA/Dex for %s' % self.filename)
-        return {'obj':world,'mag':magnitudes}
-
+        # magnitudes += dif
+        return magnitudes
 
     def Plot(self):
         hdr, img = self.openFits()
@@ -79,14 +82,20 @@ class Field(object):
         plt.savefig(name)
         print('    Created plot of %s' % self.filename)
 
+    def Extract(self):
+        self.source = self.Source()
+        world = self.Convert()
+        magnitudes = self.Photometry()
+        return {'obj':world,'mag':magnitudes}
+        
 path_to_files = 'Calibrated Images/'
 list_of_files = [f for f in os.listdir(path_to_files) if os.path.isfile(os.path.join(path_to_files,f)) and not f.startswith('.') and f.endswith('.fits')]
 
 for filename in list_of_files:
     name = path_to_files+filename
     f = Field(name)
-    o = f.Convert()
-    # for i in range(len(o['obj'])):
-    #     print('RA/Dec: %s, Instrumental Mag: %s' %(o['obj'][i],o['mag'][i]))
+    output = f.Extract()
+    for i in range(len(output['obj'])):
+        print('RA/Dec: %s, Instrumental Mag: %s' %(output['obj'][i],output['mag'][i]))
     f.Plot()
     # end with list of WCS coordinates and calibrated magnitudes
